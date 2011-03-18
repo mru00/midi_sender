@@ -1,0 +1,177 @@
+%{
+
+#include "common.h"
+#include "midi_events.hpp"
+
+int yylex();
+int yyerror(char*);
+
+
+File this_file;
+Controller current_controller;
+Signal* current_signal = NULL;
+
+
+%}
+
+/* file structure elements */
+%token SIGNAL CONTROLLER
+%token NUMBER STRING ID
+
+
+
+/* midi message types */
+%token CONTROL NOTEON NOTEOFF AFTERTOUCH
+%token PROGRAMCHANGE CHANNELPRESSURE PITCHWHEEL
+
+
+/* control types */
+%token ANALOG DIGITAL
+
+/* special */
+%token STATUS
+
+
+
+%type <ival> controller NUMBER
+%type <sig> type
+%type <str> ID
+
+
+%union {
+	int ival;
+	Signal* sig;
+	char* str;
+}
+
+%%
+
+file : controller
+		{
+		}
+	| file controller
+		{
+		}
+	;
+
+controller : CONTROLLER NUMBER '{' '}'
+		{
+			this_file.addController($2, current_controller);
+			current_controller.clear();
+		}
+	| CONTROLLER NUMBER '{' signals '}'
+		{
+			this_file.addController($2, current_controller);
+			current_controller.clear();
+		}
+	| error '}'
+		{ YYABORT;
+		}
+	;
+
+
+signals: signal
+		{
+		}
+	| signals signal
+		{
+		}
+	;
+
+signal: SIGNAL NUMBER ':' type '{' params '}'
+		{ 
+			current_controller.addSignal($2, current_signal);
+		}
+	| SIGNAL NUMBER ':' type '{' '}'
+		{ 
+			current_controller.addSignal($2, current_signal);
+		} 
+	| error '}'				
+		{ YYABORT;
+		}
+	;
+
+type: CONTROL DIGITAL
+		{
+			$$ = current_signal = new SignalDigitalControl(); 
+		}
+	| CONTROL ANALOG
+		{
+			$$ = current_signal = new SignalAnalogControl(); 
+		}
+	| NOTEON				
+		{ 
+			$$ = current_signal = new SignalNoteOn();
+		}
+	| NOTEOFF
+		{ 
+			$$ = current_signal = new SignalNoteOff();
+		}
+	| AFTERTOUCH			
+		{ 
+			$$ = current_signal = new SignalAfterTouch();
+		}
+	| PROGRAMCHANGE			
+		{ 
+			$$ = current_signal = new SignalProgramChange();
+		}
+	| CHANNELPRESSURE		
+		{ 
+			$$ = current_signal = new SignalChannelPressure();
+		}
+	| PITCHWHEEL	
+		{ 
+			$$ = current_signal = new SignalPitchWheel();
+		}
+	| STATUS
+		{ 
+			$$ = current_signal = new SignalStatus();
+		}
+	;
+
+params: param				
+		{ 
+		}
+	| params param			
+		{ 
+		}
+	;
+
+param: ID '=' NUMBER ';'	
+		{ 
+			current_signal->addParam($1, $3);
+		}
+	| ID '=' STRING ';'		
+		{ 
+		}
+	| error ';'				
+		{ YYABORT;
+		}
+	;
+
+
+%%
+
+#include "lex.yy.c"
+
+int yywrap() {
+  return(1);
+}
+
+int yyerror(char *err) {
+
+  fprintf(stderr, "%s:%d: %s, did not expect '%s' here\n", 
+		yyin_filename, 
+		yylineno, 
+		err, 
+		yytext);
+
+  return 0;
+}
+
+
+// to stop the compiler worring for uncalled static functions:
+void uncalled() {
+	yyunput(0, NULL);
+	yy_flex_realloc(NULL, 0);
+}

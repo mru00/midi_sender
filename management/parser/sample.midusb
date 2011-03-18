@@ -1,0 +1,21 @@
+# some comment
+
+controller 0 {
+
+	signal 0: control analog {
+		ch = 5;
+		id = 12;
+	}
+
+
+	signal 1: control analog {
+		ch = 2;
+		id = 16;
+	}
+
+
+	signal 3: status {
+	}
+
+}
+

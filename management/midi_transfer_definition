@@ -1,0 +1,27 @@
+lines starting with # are comment lines
+empty lines are ignored
+
+A B C D E F
+
+A: controller select, 0: master
+B: input channel, starting with 0
+C: enabled {0, 1}
+D: midi event type {control, noteon, noteoff, status}
+E: midi channel 
+F: control number, { 0..127 } for midi_control messages
+
+
+controller 0 {
+
+	signal 0: control {
+		channel = 0;
+		control = 12;
+	}
+
+	signal 1: status {
+	}	
+
+	signal 2: noteon {
+	}
+
+}

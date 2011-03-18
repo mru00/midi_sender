@@ -1,0 +1,36 @@
+
+usbled.c,1373
+#define USBLED_CMD_ON 26,655
+#define USBLED_CMD_OFF 27,679
+#define SET_CONTROL_REQUEST_TYPE 29,705
+#define SET_CONTROL_REQUEST 30,750
+#define USB_USBLED_VENDOR_ID	34,845
+#define USB_USBLED_PRODUCT_ID	35,881
+static struct usb_device_id usbled_table 38,969
+#define USB_USBLED_MINOR_BASE	46,1224
+#define MAX_TRANSFER	49,1333
+#define WRITES_IN_FLIGHT	53,1559
+struct usb_usbled usb_usbled57,1669
+  struct usb_device	*udev;udev58,1689
+  struct usb_interface	*interface;interface59,1755
+  struct semaphore	limit_sem;limit_sem60,1827
+  struct usb_anchor	submitted;submitted61,1906
+  int			errors;errors63,1988
+  int			open_count;open_count64,2036
+  spinlock_t		err_lock;err_lock65,2091
+  struct kref		kref;kref66,2138
+  struct mutex		io_mutex;io_mutex67,2159
+#define to_usbled_dev(to_usbled_dev69,2227
+static struct usb_driver usbled_driver;71,2294
+static void usbled_delete(73,2335
+static int usbled_open(81,2474
+static int usbled_release(135,3815
+static int usbled_flush(154,4293
+static ssize_t usbled_write(177,4806
+static const struct file_operations usbled_fops 260,6527
+static struct usb_class_driver usbled_class 272,6849
+static int usbled_probe(278,6988
+static void usbled_disconnect(325,8375
+static struct usb_driver usbled_driver 348,8902
+static int __init usb_usbled_init(356,9087
+static void __exit usb_usbled_exit(368,9329

@@ -1,0 +1,446 @@
+Grammar
+
+    0 $accept: file $end
+
+    1 file: controller
+    2     | file controller
+
+    3 controller: CONTROLLER NUMBER '{' '}'
+    4           | CONTROLLER NUMBER '{' signals '}'
+    5           | error '}'
+
+    6 signals: signal
+    7        | signals signal
+
+    8 signal: SIGNAL NUMBER ':' type '{' params '}'
+    9       | SIGNAL NUMBER ':' type '{' '}'
+   10       | error '}'
+
+   11 type: CONTROL DIGITAL
+   12     | CONTROL ANALOG
+   13     | NOTEON
+   14     | NOTEOFF
+   15     | AFTERTOUCH
+   16     | PROGRAMCHANGE
+   17     | CHANNELPRESSURE
+   18     | PITCHWHEEL
+   19     | STATUS
+
+   20 params: param
+   21       | params param
+
+   22 param: ID '=' NUMBER ';'
+   23      | ID '=' STRING ';'
+   24      | error ';'
+
+
+Terminals, with rules where they appear
+
+$end (0) 0
+':' (58) 8 9
+';' (59) 22 23 24
+'=' (61) 22 23
+'{' (123) 3 4 8 9
+'}' (125) 3 4 5 8 9 10
+error (256) 5 10 24
+SIGNAL (258) 8 9
+CONTROLLER (259) 3 4
+NUMBER (260) 3 4 8 9 22
+STRING (261) 23
+ID (262) 22 23
+CONTROL (263) 11 12
+NOTEON (264) 13
+NOTEOFF (265) 14
+AFTERTOUCH (266) 15
+PROGRAMCHANGE (267) 16
+CHANNELPRESSURE (268) 17
+PITCHWHEEL (269) 18
+ANALOG (270) 12
+DIGITAL (271) 11
+STATUS (272) 19
+
+
+Nonterminals, with rules where they appear
+
+$accept (23)
+    on left: 0
+file (24)
+    on left: 1 2, on right: 0 2
+controller (25)
+    on left: 3 4 5, on right: 1 2
+signals (26)
+    on left: 6 7, on right: 4 7
+signal (27)
+    on left: 8 9 10, on right: 6 7
+type (28)
+    on left: 11 12 13 14 15 16 17 18 19, on right: 8 9
+params (29)
+    on left: 20 21, on right: 8 21
+param (30)
+    on left: 22 23 24, on right: 20 21
+
+
+state 0
+
+    0 $accept: . file $end
+
+    error       shift, and go to state 1
+    CONTROLLER  shift, and go to state 2
+
+    file        go to state 3
+    controller  go to state 4
+
+
+state 1
+
+    5 controller: error . '}'
+
+    '}'  shift, and go to state 5
+
+
+state 2
+
+    3 controller: CONTROLLER . NUMBER '{' '}'
+    4           | CONTROLLER . NUMBER '{' signals '}'
+
+    NUMBER  shift, and go to state 6
+
+
+state 3
+
+    0 $accept: file . $end
+    2 file: file . controller
+
+    $end        shift, and go to state 7
+    error       shift, and go to state 1
+    CONTROLLER  shift, and go to state 2
+
+    controller  go to state 8
+
+
+state 4
+
+    1 file: controller .
+
+    $default  reduce using rule 1 (file)
+
+
+state 5
+
+    5 controller: error '}' .
+
+    $default  reduce using rule 5 (controller)
+
+
+state 6
+
+    3 controller: CONTROLLER NUMBER . '{' '}'
+    4           | CONTROLLER NUMBER . '{' signals '}'
+
+    '{'  shift, and go to state 9
+
+
+state 7
+
+    0 $accept: file $end .
+
+    $default  accept
+
+
+state 8
+
+    2 file: file controller .
+
+    $default  reduce using rule 2 (file)
+
+
+state 9
+
+    3 controller: CONTROLLER NUMBER '{' . '}'
+    4           | CONTROLLER NUMBER '{' . signals '}'
+
+    error   shift, and go to state 10
+    SIGNAL  shift, and go to state 11
+    '}'     shift, and go to state 12
+
+    signals  go to state 13
+    signal   go to state 14
+
+
+state 10
+
+   10 signal: error . '}'
+
+    '}'  shift, and go to state 15
+
+
+state 11
+
+    8 signal: SIGNAL . NUMBER ':' type '{' params '}'
+    9       | SIGNAL . NUMBER ':' type '{' '}'
+
+    NUMBER  shift, and go to state 16
+
+
+state 12
+
+    3 controller: CONTROLLER NUMBER '{' '}' .
+
+    $default  reduce using rule 3 (controller)
+
+
+state 13
+
+    4 controller: CONTROLLER NUMBER '{' signals . '}'
+    7 signals: signals . signal
+
+    error   shift, and go to state 10
+    SIGNAL  shift, and go to state 11
+    '}'     shift, and go to state 17
+
+    signal  go to state 18
+
+
+state 14
+
+    6 signals: signal .
+
+    $default  reduce using rule 6 (signals)
+
+
+state 15
+
+   10 signal: error '}' .
+
+    $default  reduce using rule 10 (signal)
+
+
+state 16
+
+    8 signal: SIGNAL NUMBER . ':' type '{' params '}'
+    9       | SIGNAL NUMBER . ':' type '{' '}'
+
+    ':'  shift, and go to state 19
+
+
+state 17
+
+    4 controller: CONTROLLER NUMBER '{' signals '}' .
+
+    $default  reduce using rule 4 (controller)
+
+
+state 18
+
+    7 signals: signals signal .
+
+    $default  reduce using rule 7 (signals)
+
+
+state 19
+
+    8 signal: SIGNAL NUMBER ':' . type '{' params '}'
+    9       | SIGNAL NUMBER ':' . type '{' '}'
+
+    CONTROL          shift, and go to state 20
+    NOTEON           shift, and go to state 21
+    NOTEOFF          shift, and go to state 22
+    AFTERTOUCH       shift, and go to state 23
+    PROGRAMCHANGE    shift, and go to state 24
+    CHANNELPRESSURE  shift, and go to state 25
+    PITCHWHEEL       shift, and go to state 26
+    STATUS           shift, and go to state 27
+
+    type  go to state 28
+
+
+state 20
+
+   11 type: CONTROL . DIGITAL
+   12     | CONTROL . ANALOG
+
+    ANALOG   shift, and go to state 29
+    DIGITAL  shift, and go to state 30
+
+
+state 21
+
+   13 type: NOTEON .
+
+    $default  reduce using rule 13 (type)
+
+
+state 22
+
+   14 type: NOTEOFF .
+
+    $default  reduce using rule 14 (type)
+
+
+state 23
+
+   15 type: AFTERTOUCH .
+
+    $default  reduce using rule 15 (type)
+
+
+state 24
+
+   16 type: PROGRAMCHANGE .
+
+    $default  reduce using rule 16 (type)
+
+
+state 25
+
+   17 type: CHANNELPRESSURE .
+
+    $default  reduce using rule 17 (type)
+
+
+state 26
+
+   18 type: PITCHWHEEL .
+
+    $default  reduce using rule 18 (type)
+
+
+state 27
+
+   19 type: STATUS .
+
+    $default  reduce using rule 19 (type)
+
+
+state 28
+
+    8 signal: SIGNAL NUMBER ':' type . '{' params '}'
+    9       | SIGNAL NUMBER ':' type . '{' '}'
+
+    '{'  shift, and go to state 31
+
+
+state 29
+
+   12 type: CONTROL ANALOG .
+
+    $default  reduce using rule 12 (type)
+
+
+state 30
+
+   11 type: CONTROL DIGITAL .
+
+    $default  reduce using rule 11 (type)
+
+
+state 31
+
+    8 signal: SIGNAL NUMBER ':' type '{' . params '}'
+    9       | SIGNAL NUMBER ':' type '{' . '}'
+
+    error  shift, and go to state 32
+    ID     shift, and go to state 33
+    '}'    shift, and go to state 34
+
+    params  go to state 35
+    param   go to state 36
+
+
+state 32
+
+   24 param: error . ';'
+
+    ';'  shift, and go to state 37
+
+
+state 33
+
+   22 param: ID . '=' NUMBER ';'
+   23      | ID . '=' STRING ';'
+
+    '='  shift, and go to state 38
+
+
+state 34
+
+    9 signal: SIGNAL NUMBER ':' type '{' '}' .
+
+    $default  reduce using rule 9 (signal)
+
+
+state 35
+
+    8 signal: SIGNAL NUMBER ':' type '{' params . '}'
+   21 params: params . param
+
+    error  shift, and go to state 32
+    ID     shift, and go to state 33
+    '}'    shift, and go to state 39
+
+    param  go to state 40
+
+
+state 36
+
+   20 params: param .
+
+    $default  reduce using rule 20 (params)
+
+
+state 37
+
+   24 param: error ';' .
+
+    $default  reduce using rule 24 (param)
+
+
+state 38
+
+   22 param: ID '=' . NUMBER ';'
+   23      | ID '=' . STRING ';'
+
+    NUMBER  shift, and go to state 41
+    STRING  shift, and go to state 42
+
+
+state 39
+
+    8 signal: SIGNAL NUMBER ':' type '{' params '}' .
+
+    $default  reduce using rule 8 (signal)
+
+
+state 40
+
+   21 params: params param .
+
+    $default  reduce using rule 21 (params)
+
+
+state 41
+
+   22 param: ID '=' NUMBER . ';'
+
+    ';'  shift, and go to state 43
+
+
+state 42
+
+   23 param: ID '=' STRING . ';'
+
+    ';'  shift, and go to state 44
+
+
+state 43
+
+   22 param: ID '=' NUMBER ';' .
+
+    $default  reduce using rule 22 (param)
+
+
+state 44
+
+   23 param: ID '=' STRING ';' .
+
+    $default  reduce using rule 23 (param)

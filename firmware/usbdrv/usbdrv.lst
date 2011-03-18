@@ -1,0 +1,1093 @@
+   1               		.file	"usbdrv.c"
+   2               		.arch atmega8
+   3               	__SREG__ = 0x3f
+   4               	__SP_H__ = 0x3e
+   5               	__SP_L__ = 0x3d
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   8               		.global __do_copy_data
+   9               		.global __do_clear_bss
+  11               		.text
+  12               	.Ltext0:
+  91               	.global	usbInit
+  93               	usbInit:
+   1:usbdrv/usbdrv.c **** /* Name: usbdrv.c
+   2:usbdrv/usbdrv.c ****  * Project: AVR USB driver
+   3:usbdrv/usbdrv.c ****  * Author: Christian Starkjohann
+   4:usbdrv/usbdrv.c ****  * Creation Date: 2004-12-29
+   5:usbdrv/usbdrv.c ****  * Tabsize: 4
+   6:usbdrv/usbdrv.c ****  * Copyright: (c) 2005 by OBJECTIVE DEVELOPMENT Software GmbH
+   7:usbdrv/usbdrv.c ****  * License: GNU GPL v2 (see License.txt) or proprietary (CommercialLicense.txt)
+   8:usbdrv/usbdrv.c ****  * This Revision: $Id: usbdrv.c 350 2007-06-13 11:43:16Z cs $
+   9:usbdrv/usbdrv.c ****  */
+  10:usbdrv/usbdrv.c **** 
+  11:usbdrv/usbdrv.c **** #include "iarcompat.h"
+  12:usbdrv/usbdrv.c **** #ifndef __IAR_SYSTEMS_ICC__
+  13:usbdrv/usbdrv.c **** #   include <avr/io.h>
+  14:usbdrv/usbdrv.c **** #   include <avr/pgmspace.h>
+  15:usbdrv/usbdrv.c **** #endif
+  16:usbdrv/usbdrv.c **** #include "usbdrv.h"
+  17:usbdrv/usbdrv.c **** #include "oddebug.h"
+  18:usbdrv/usbdrv.c **** 
+  19:usbdrv/usbdrv.c **** /*
+  20:usbdrv/usbdrv.c **** General Description:
+  21:usbdrv/usbdrv.c **** This module implements the C-part of the USB driver. See usbdrv.h for a
+  22:usbdrv/usbdrv.c **** documentation of the entire driver.
+  23:usbdrv/usbdrv.c **** */
+  24:usbdrv/usbdrv.c **** 
+  25:usbdrv/usbdrv.c **** #ifndef IAR_SECTION
+  26:usbdrv/usbdrv.c **** #define IAR_SECTION(arg)
+  27:usbdrv/usbdrv.c **** #define __no_init
+  28:usbdrv/usbdrv.c **** #endif
+  29:usbdrv/usbdrv.c **** /* The macro IAR_SECTION is a hack to allow IAR-cc compatibility. On gcc, it
+  30:usbdrv/usbdrv.c ****  * is defined to nothing. __no_init is required on IAR.
+  31:usbdrv/usbdrv.c ****  */
+  32:usbdrv/usbdrv.c **** 
+  33:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+  34:usbdrv/usbdrv.c **** 
+  35:usbdrv/usbdrv.c **** /* raw USB registers / interface to assembler code: */
+  36:usbdrv/usbdrv.c **** uchar usbRxBuf[2*USB_BUFSIZE];  /* raw RX buffer: PID, 8 bytes data, 2 bytes CRC */
+  37:usbdrv/usbdrv.c **** uchar       usbInputBufOffset;  /* offset in usbRxBuf used for low level receiving */
+  38:usbdrv/usbdrv.c **** uchar       usbDeviceAddr;      /* assigned during enumeration, defaults to 0 */
+  39:usbdrv/usbdrv.c **** uchar       usbNewDeviceAddr;   /* device ID which should be set after status phase */
+  40:usbdrv/usbdrv.c **** uchar       usbConfiguration;   /* currently selected configuration. Administered by driver, but no
+  41:usbdrv/usbdrv.c **** volatile schar usbRxLen;        /* = 0; number of bytes in usbRxBuf; 0 means free, -1 for flow cont
+  42:usbdrv/usbdrv.c **** uchar       usbCurrentTok;      /* last token received, if more than 1 rx endpoint: MSb=endpoint */
+  43:usbdrv/usbdrv.c **** uchar       usbRxToken;         /* token for data we received; if more than 1 rx endpoint: MSb=endp
+  44:usbdrv/usbdrv.c **** uchar       usbMsgLen = 0xff;   /* remaining number of bytes, no msg to send if -1 (see usbMsgPtr) 
+  45:usbdrv/usbdrv.c **** volatile uchar usbTxLen = USBPID_NAK;   /* number of bytes to transmit with next IN token or handsh
+  46:usbdrv/usbdrv.c **** uchar       usbTxBuf[USB_BUFSIZE];/* data to transmit with next IN, free if usbTxLen contains hands
+  47:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT
+  48:usbdrv/usbdrv.c **** volatile uchar usbTxLen1 = USBPID_NAK;  /* TX count for endpoint 1 */
+  49:usbdrv/usbdrv.c **** uchar       usbTxBuf1[USB_BUFSIZE];     /* TX data for endpoint 1 */
+  50:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT3
+  51:usbdrv/usbdrv.c **** volatile uchar usbTxLen3 = USBPID_NAK;  /* TX count for endpoint 1 */
+  52:usbdrv/usbdrv.c **** uchar       usbTxBuf3[USB_BUFSIZE];     /* TX data for endpoint 1 */
+  53:usbdrv/usbdrv.c **** #endif
+  54:usbdrv/usbdrv.c **** #endif
+  55:usbdrv/usbdrv.c **** 
+  56:usbdrv/usbdrv.c **** /* USB status registers / not shared with asm code */
+  57:usbdrv/usbdrv.c **** uchar           *usbMsgPtr;     /* data to transmit next -- ROM or RAM address */
+  58:usbdrv/usbdrv.c **** static uchar    usbMsgFlags;    /* flag values see below */
+  59:usbdrv/usbdrv.c **** 
+  60:usbdrv/usbdrv.c **** #define USB_FLG_TX_PACKET       (1<<0)
+  61:usbdrv/usbdrv.c **** /* Leave free 6 bits after TX_PACKET. This way we can increment usbMsgFlags to toggle TX_PACKET */
+  62:usbdrv/usbdrv.c **** #define USB_FLG_MSGPTR_IS_ROM   (1<<6)
+  63:usbdrv/usbdrv.c **** #define USB_FLG_USE_DEFAULT_RW  (1<<7)
+  64:usbdrv/usbdrv.c **** 
+  65:usbdrv/usbdrv.c **** /*
+  66:usbdrv/usbdrv.c **** optimizing hints:
+  67:usbdrv/usbdrv.c **** - do not post/pre inc/dec integer values in operations
+  68:usbdrv/usbdrv.c **** - assign value of PRG_RDB() to register variables and don't use side effects in arg
+  69:usbdrv/usbdrv.c **** - use narrow scope for variables which should be in X/Y/Z register
+  70:usbdrv/usbdrv.c **** - assign char sized expressions to variables to force 8 bit arithmetics
+  71:usbdrv/usbdrv.c **** */
+  72:usbdrv/usbdrv.c **** 
+  73:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+  74:usbdrv/usbdrv.c **** 
+  75:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRINGS == 0
+  76:usbdrv/usbdrv.c **** 
+  77:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRING_0 == 0
+  78:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_STRING_0
+  79:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_STRING_0    sizeof(usbDescriptorString0)
+  80:usbdrv/usbdrv.c **** PROGMEM char usbDescriptorString0[] = { /* language descriptor */
+  81:usbdrv/usbdrv.c ****     4,          /* sizeof(usbDescriptorString0): length of descriptor in bytes */
+  82:usbdrv/usbdrv.c ****     3,          /* descriptor type */
+  83:usbdrv/usbdrv.c ****     0x09, 0x04, /* language index (0x0409 = US-English) */
+  84:usbdrv/usbdrv.c **** };
+  85:usbdrv/usbdrv.c **** #endif
+  86:usbdrv/usbdrv.c **** 
+  87:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRING_VENDOR == 0 && USB_CFG_VENDOR_NAME_LEN
+  88:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_STRING_VENDOR
+  89:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_STRING_VENDOR   sizeof(usbDescriptorStringVendor)
+  90:usbdrv/usbdrv.c **** PROGMEM int  usbDescriptorStringVendor[] = {
+  91:usbdrv/usbdrv.c ****     USB_STRING_DESCRIPTOR_HEADER(USB_CFG_VENDOR_NAME_LEN),
+  92:usbdrv/usbdrv.c ****     USB_CFG_VENDOR_NAME
+  93:usbdrv/usbdrv.c **** };
+  94:usbdrv/usbdrv.c **** #endif
+  95:usbdrv/usbdrv.c **** 
+  96:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRING_PRODUCT == 0 && USB_CFG_DEVICE_NAME_LEN
+  97:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_STRING_PRODUCT
+  98:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_STRING_PRODUCT   sizeof(usbDescriptorStringDevice)
+  99:usbdrv/usbdrv.c **** PROGMEM int  usbDescriptorStringDevice[] = {
+ 100:usbdrv/usbdrv.c ****     USB_STRING_DESCRIPTOR_HEADER(USB_CFG_DEVICE_NAME_LEN),
+ 101:usbdrv/usbdrv.c ****     USB_CFG_DEVICE_NAME
+ 102:usbdrv/usbdrv.c **** };
+ 103:usbdrv/usbdrv.c **** #endif
+ 104:usbdrv/usbdrv.c **** 
+ 105:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRING_SERIAL_NUMBER == 0 && USB_CFG_SERIAL_NUMBER_LEN
+ 106:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_STRING_SERIAL_NUMBER
+ 107:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_STRING_SERIAL_NUMBER    sizeof(usbDescriptorStringSerialNumber)
+ 108:usbdrv/usbdrv.c **** PROGMEM int usbDescriptorStringSerialNumber[] = {
+ 109:usbdrv/usbdrv.c ****     USB_STRING_DESCRIPTOR_HEADER(USB_CFG_SERIAL_NUMBER_LEN),
+ 110:usbdrv/usbdrv.c ****     USB_CFG_SERIAL_NUMBER
+ 111:usbdrv/usbdrv.c **** };
+ 112:usbdrv/usbdrv.c **** #endif
+ 113:usbdrv/usbdrv.c **** 
+ 114:usbdrv/usbdrv.c **** #endif  /* USB_CFG_DESCR_PROPS_STRINGS == 0 */
+ 115:usbdrv/usbdrv.c **** 
+ 116:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_DEVICE == 0
+ 117:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_DEVICE
+ 118:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_DEVICE  sizeof(usbDescriptorDevice)
+ 119:usbdrv/usbdrv.c **** PROGMEM char usbDescriptorDevice[] = {    /* USB device descriptor */
+ 120:usbdrv/usbdrv.c ****     18,         /* sizeof(usbDescriptorDevice): length of descriptor in bytes */
+ 121:usbdrv/usbdrv.c ****     USBDESCR_DEVICE,        /* descriptor type */
+ 122:usbdrv/usbdrv.c ****     0x10, 0x01,             /* USB version supported */
+ 123:usbdrv/usbdrv.c ****     USB_CFG_DEVICE_CLASS,
+ 124:usbdrv/usbdrv.c ****     USB_CFG_DEVICE_SUBCLASS,
+ 125:usbdrv/usbdrv.c ****     0,                      /* protocol */
+ 126:usbdrv/usbdrv.c ****     8,                      /* max packet size */
+ 127:usbdrv/usbdrv.c ****     USB_CFG_VENDOR_ID,      /* 2 bytes */
+ 128:usbdrv/usbdrv.c ****     USB_CFG_DEVICE_ID,      /* 2 bytes */
+ 129:usbdrv/usbdrv.c ****     USB_CFG_DEVICE_VERSION, /* 2 bytes */
+ 130:usbdrv/usbdrv.c ****     USB_CFG_DESCR_PROPS_STRING_VENDOR != 0 ? 1 : 0,         /* manufacturer string index */
+ 131:usbdrv/usbdrv.c ****     USB_CFG_DESCR_PROPS_STRING_PRODUCT != 0 ? 2 : 0,        /* product string index */
+ 132:usbdrv/usbdrv.c ****     USB_CFG_DESCR_PROPS_STRING_SERIAL_NUMBER != 0 ? 3 : 0,  /* serial number string index */
+ 133:usbdrv/usbdrv.c ****     1,          /* number of configurations */
+ 134:usbdrv/usbdrv.c **** };
+ 135:usbdrv/usbdrv.c **** #endif
+ 136:usbdrv/usbdrv.c **** 
+ 137:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_HID_REPORT != 0 && USB_CFG_DESCR_PROPS_HID == 0
+ 138:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_HID
+ 139:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_HID     9   /* length of HID descriptor in config descriptor below */
+ 140:usbdrv/usbdrv.c **** #endif
+ 141:usbdrv/usbdrv.c **** 
+ 142:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_CONFIGURATION == 0
+ 143:usbdrv/usbdrv.c **** #undef USB_CFG_DESCR_PROPS_CONFIGURATION
+ 144:usbdrv/usbdrv.c **** #define USB_CFG_DESCR_PROPS_CONFIGURATION   sizeof(usbDescriptorConfiguration)
+ 145:usbdrv/usbdrv.c **** PROGMEM char usbDescriptorConfiguration[] = {    /* USB configuration descriptor */
+ 146:usbdrv/usbdrv.c ****     9,          /* sizeof(usbDescriptorConfiguration): length of descriptor in bytes */
+ 147:usbdrv/usbdrv.c ****     USBDESCR_CONFIG,    /* descriptor type */
+ 148:usbdrv/usbdrv.c ****     18 + 7 * USB_CFG_HAVE_INTRIN_ENDPOINT + (USB_CFG_DESCR_PROPS_HID & 0xff), 0,
+ 149:usbdrv/usbdrv.c ****                 /* total length of data returned (including inlined descriptors) */
+ 150:usbdrv/usbdrv.c ****     1,          /* number of interfaces in this configuration */
+ 151:usbdrv/usbdrv.c ****     1,          /* index of this configuration */
+ 152:usbdrv/usbdrv.c ****     0,          /* configuration name string index */
+ 153:usbdrv/usbdrv.c **** #if USB_CFG_IS_SELF_POWERED
+ 154:usbdrv/usbdrv.c ****     USBATTR_SELFPOWER,  /* attributes */
+ 155:usbdrv/usbdrv.c **** #else
+ 156:usbdrv/usbdrv.c ****     USBATTR_BUSPOWER,   /* attributes */
+ 157:usbdrv/usbdrv.c **** #endif
+ 158:usbdrv/usbdrv.c ****     USB_CFG_MAX_BUS_POWER/2,            /* max USB current in 2mA units */
+ 159:usbdrv/usbdrv.c **** /* interface descriptor follows inline: */
+ 160:usbdrv/usbdrv.c ****     9,          /* sizeof(usbDescrInterface): length of descriptor in bytes */
+ 161:usbdrv/usbdrv.c ****     USBDESCR_INTERFACE, /* descriptor type */
+ 162:usbdrv/usbdrv.c ****     0,          /* index of this interface */
+ 163:usbdrv/usbdrv.c ****     0,          /* alternate setting for this interface */
+ 164:usbdrv/usbdrv.c ****     USB_CFG_HAVE_INTRIN_ENDPOINT,   /* endpoints excl 0: number of endpoint descriptors to follow *
+ 165:usbdrv/usbdrv.c ****     USB_CFG_INTERFACE_CLASS,
+ 166:usbdrv/usbdrv.c ****     USB_CFG_INTERFACE_SUBCLASS,
+ 167:usbdrv/usbdrv.c ****     USB_CFG_INTERFACE_PROTOCOL,
+ 168:usbdrv/usbdrv.c ****     0,          /* string index for interface */
+ 169:usbdrv/usbdrv.c **** #if (USB_CFG_DESCR_PROPS_HID & 0xff)    /* HID descriptor */
+ 170:usbdrv/usbdrv.c ****     9,          /* sizeof(usbDescrHID): length of descriptor in bytes */
+ 171:usbdrv/usbdrv.c ****     USBDESCR_HID,   /* descriptor type: HID */
+ 172:usbdrv/usbdrv.c ****     0x01, 0x01, /* BCD representation of HID version */
+ 173:usbdrv/usbdrv.c ****     0x00,       /* target country code */
+ 174:usbdrv/usbdrv.c ****     0x01,       /* number of HID Report (or other HID class) Descriptor infos to follow */
+ 175:usbdrv/usbdrv.c ****     0x22,       /* descriptor type: report */
+ 176:usbdrv/usbdrv.c ****     USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH, 0,  /* total length of report descriptor */
+ 177:usbdrv/usbdrv.c **** #endif
+ 178:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT    /* endpoint descriptor for endpoint 1 */
+ 179:usbdrv/usbdrv.c ****     7,          /* sizeof(usbDescrEndpoint) */
+ 180:usbdrv/usbdrv.c ****     USBDESCR_ENDPOINT,  /* descriptor type = endpoint */
+ 181:usbdrv/usbdrv.c ****     0x81,       /* IN endpoint number 1 */
+ 182:usbdrv/usbdrv.c ****     0x03,       /* attrib: Interrupt endpoint */
+ 183:usbdrv/usbdrv.c ****     8, 0,       /* maximum packet size */
+ 184:usbdrv/usbdrv.c ****     USB_CFG_INTR_POLL_INTERVAL, /* in ms */
+ 185:usbdrv/usbdrv.c **** #endif
+ 186:usbdrv/usbdrv.c **** };
+ 187:usbdrv/usbdrv.c **** #endif
+ 188:usbdrv/usbdrv.c **** 
+ 189:usbdrv/usbdrv.c **** /* We don't use prog_int or prog_int16_t for compatibility with various libc
+ 190:usbdrv/usbdrv.c ****  * versions. Here's an other compatibility hack:
+ 191:usbdrv/usbdrv.c ****  */
+ 192:usbdrv/usbdrv.c **** #ifndef PRG_RDB
+ 193:usbdrv/usbdrv.c **** #define PRG_RDB(addr)   pgm_read_byte(addr)
+ 194:usbdrv/usbdrv.c **** #endif
+ 195:usbdrv/usbdrv.c **** 
+ 196:usbdrv/usbdrv.c **** typedef union{
+ 197:usbdrv/usbdrv.c ****     unsigned    word;
+ 198:usbdrv/usbdrv.c ****     uchar       *ptr;
+ 199:usbdrv/usbdrv.c ****     uchar       bytes[2];
+ 200:usbdrv/usbdrv.c **** }converter_t;
+ 201:usbdrv/usbdrv.c **** /* We use this union to do type conversions. This is better optimized than
+ 202:usbdrv/usbdrv.c ****  * type casts in gcc 3.4.3 and much better than using bit shifts to build
+ 203:usbdrv/usbdrv.c ****  * ints from chars. Byte ordering is not a problem on an 8 bit platform.
+ 204:usbdrv/usbdrv.c ****  */
+ 205:usbdrv/usbdrv.c **** 
+ 206:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+ 207:usbdrv/usbdrv.c **** 
+ 208:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT
+ 209:usbdrv/usbdrv.c **** USB_PUBLIC void usbSetInterrupt(uchar *data, uchar len)
+ 210:usbdrv/usbdrv.c **** {
+ 211:usbdrv/usbdrv.c **** uchar       *p, i;
+ 212:usbdrv/usbdrv.c **** 
+ 213:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_HALT
+ 214:usbdrv/usbdrv.c ****     if(usbTxLen1 == USBPID_STALL)
+ 215:usbdrv/usbdrv.c ****         return;
+ 216:usbdrv/usbdrv.c **** #endif
+ 217:usbdrv/usbdrv.c **** #if 0   /* No runtime checks! Caller is responsible for valid data! */
+ 218:usbdrv/usbdrv.c ****     if(len > 8) /* interrupt transfers are limited to 8 bytes */
+ 219:usbdrv/usbdrv.c ****         len = 8;
+ 220:usbdrv/usbdrv.c **** #endif
+ 221:usbdrv/usbdrv.c ****     if(usbTxLen1 & 0x10){   /* packet buffer was empty */
+ 222:usbdrv/usbdrv.c ****         usbTxBuf1[0] ^= USBPID_DATA0 ^ USBPID_DATA1;    /* toggle token */
+ 223:usbdrv/usbdrv.c ****     }else{
+ 224:usbdrv/usbdrv.c ****         usbTxLen1 = USBPID_NAK; /* avoid sending outdated (overwritten) interrupt data */
+ 225:usbdrv/usbdrv.c ****     }
+ 226:usbdrv/usbdrv.c ****     p = usbTxBuf1 + 1;
+ 227:usbdrv/usbdrv.c ****     for(i=len;i--;)
+ 228:usbdrv/usbdrv.c ****         *p++ = *data++;
+ 229:usbdrv/usbdrv.c ****     usbCrc16Append(&usbTxBuf1[1], len);
+ 230:usbdrv/usbdrv.c ****     usbTxLen1 = len + 4;    /* len must be given including sync byte */
+ 231:usbdrv/usbdrv.c ****     DBG2(0x21, usbTxBuf1, len + 3);
+ 232:usbdrv/usbdrv.c **** }
+ 233:usbdrv/usbdrv.c **** #endif
+ 234:usbdrv/usbdrv.c **** 
+ 235:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT3
+ 236:usbdrv/usbdrv.c **** USB_PUBLIC void usbSetInterrupt3(uchar *data, uchar len)
+ 237:usbdrv/usbdrv.c **** {
+ 238:usbdrv/usbdrv.c **** uchar       *p, i;
+ 239:usbdrv/usbdrv.c **** 
+ 240:usbdrv/usbdrv.c ****     if(usbTxLen3 & 0x10){   /* packet buffer was empty */
+ 241:usbdrv/usbdrv.c ****         usbTxBuf3[0] ^= USBPID_DATA0 ^ USBPID_DATA1;    /* toggle token */
+ 242:usbdrv/usbdrv.c ****     }else{
+ 243:usbdrv/usbdrv.c ****         usbTxLen3 = USBPID_NAK; /* avoid sending outdated (overwritten) interrupt data */
+ 244:usbdrv/usbdrv.c ****     }
+ 245:usbdrv/usbdrv.c ****     p = usbTxBuf3 + 1;
+ 246:usbdrv/usbdrv.c ****     for(i=len;i--;)
+ 247:usbdrv/usbdrv.c ****         *p++ = *data++;
+ 248:usbdrv/usbdrv.c ****     usbCrc16Append(&usbTxBuf3[1], len);
+ 249:usbdrv/usbdrv.c ****     usbTxLen3 = len + 4;    /* len must be given including sync byte */
+ 250:usbdrv/usbdrv.c ****     DBG2(0x23, usbTxBuf3, len + 3);
+ 251:usbdrv/usbdrv.c **** }
+ 252:usbdrv/usbdrv.c **** #endif
+ 253:usbdrv/usbdrv.c **** 
+ 254:usbdrv/usbdrv.c **** 
+ 255:usbdrv/usbdrv.c **** static uchar usbRead(uchar *data, uchar len)
+ 256:usbdrv/usbdrv.c **** {
+ 257:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_FN_READ
+ 258:usbdrv/usbdrv.c ****     if(usbMsgFlags & USB_FLG_USE_DEFAULT_RW){
+ 259:usbdrv/usbdrv.c **** #endif
+ 260:usbdrv/usbdrv.c ****         uchar i = len, *r = usbMsgPtr;
+ 261:usbdrv/usbdrv.c ****         if(usbMsgFlags & USB_FLG_MSGPTR_IS_ROM){    /* ROM data */
+ 262:usbdrv/usbdrv.c ****             while(i--){
+ 263:usbdrv/usbdrv.c ****                 uchar c = PRG_RDB(r);    /* assign to char size variable to enforce byte ops */
+ 264:usbdrv/usbdrv.c ****                 *data++ = c;
+ 265:usbdrv/usbdrv.c ****                 r++;
+ 266:usbdrv/usbdrv.c ****             }
+ 267:usbdrv/usbdrv.c ****         }else{                  /* RAM data */
+ 268:usbdrv/usbdrv.c ****             while(i--)
+ 269:usbdrv/usbdrv.c ****                 *data++ = *r++;
+ 270:usbdrv/usbdrv.c ****         }
+ 271:usbdrv/usbdrv.c ****         usbMsgPtr = r;
+ 272:usbdrv/usbdrv.c ****         return len;
+ 273:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_FN_READ
+ 274:usbdrv/usbdrv.c ****     }else{
+ 275:usbdrv/usbdrv.c ****         if(len != 0)    /* don't bother app with 0 sized reads */
+ 276:usbdrv/usbdrv.c ****             return usbFunctionRead(data, len);
+ 277:usbdrv/usbdrv.c ****         return 0;
+ 278:usbdrv/usbdrv.c ****     }
+ 279:usbdrv/usbdrv.c **** #endif
+ 280:usbdrv/usbdrv.c **** }
+ 281:usbdrv/usbdrv.c **** 
+ 282:usbdrv/usbdrv.c **** 
+ 283:usbdrv/usbdrv.c **** #define GET_DESCRIPTOR(cfgProp, staticName)         \
+ 284:usbdrv/usbdrv.c ****     if(cfgProp){                                    \
+ 285:usbdrv/usbdrv.c ****         if((cfgProp) & USB_PROP_IS_RAM)             \
+ 286:usbdrv/usbdrv.c ****             flags &= ~USB_FLG_MSGPTR_IS_ROM;        \
+ 287:usbdrv/usbdrv.c ****         if((cfgProp) & USB_PROP_IS_DYNAMIC){        \
+ 288:usbdrv/usbdrv.c ****             replyLen = usbFunctionDescriptor(rq);   \
+ 289:usbdrv/usbdrv.c ****         }else{                                      \
+ 290:usbdrv/usbdrv.c ****             replyData = (uchar *)(staticName);      \
+ 291:usbdrv/usbdrv.c ****             SET_REPLY_LEN((cfgProp) & 0xff);        \
+ 292:usbdrv/usbdrv.c ****         }                                           \
+ 293:usbdrv/usbdrv.c ****     }
+ 294:usbdrv/usbdrv.c **** /* We use if() instead of #if in the macro above because #if can't be used
+ 295:usbdrv/usbdrv.c ****  * in macros and the compiler optimizes constant conditions anyway.
+ 296:usbdrv/usbdrv.c ****  */
+ 297:usbdrv/usbdrv.c **** 
+ 298:usbdrv/usbdrv.c **** 
+ 299:usbdrv/usbdrv.c **** /* Don't make this function static to avoid inlining.
+ 300:usbdrv/usbdrv.c ****  * The entire function would become too large and exceed the range of
+ 301:usbdrv/usbdrv.c ****  * relative jumps.
+ 302:usbdrv/usbdrv.c ****  * 2006-02-25: Either gcc 3.4.3 is better than the gcc used when the comment
+ 303:usbdrv/usbdrv.c ****  * above was written, or other parts of the code have changed. We now get
+ 304:usbdrv/usbdrv.c ****  * better results with an inlined function. Test condition: PowerSwitch code.
+ 305:usbdrv/usbdrv.c ****  */
+ 306:usbdrv/usbdrv.c **** static void usbProcessRx(uchar *data, uchar len)
+ 307:usbdrv/usbdrv.c **** {
+ 308:usbdrv/usbdrv.c **** usbRequest_t    *rq = (void *)data;
+ 309:usbdrv/usbdrv.c **** uchar           replyLen = 0, flags = USB_FLG_USE_DEFAULT_RW;
+ 310:usbdrv/usbdrv.c **** /* We use if() cascades because the compare is done byte-wise while switch()
+ 311:usbdrv/usbdrv.c ****  * is int-based. The if() cascades are therefore more efficient.
+ 312:usbdrv/usbdrv.c ****  */
+ 313:usbdrv/usbdrv.c **** /* usbRxToken can be:
+ 314:usbdrv/usbdrv.c ****  * 0x2d 00101101 (USBPID_SETUP for endpoint 0)
+ 315:usbdrv/usbdrv.c ****  * 0xe1 11100001 (USBPID_OUT for endpoint 0)
+ 316:usbdrv/usbdrv.c ****  * 0xff 11111111 (USBPID_OUT for endpoint 1)
+ 317:usbdrv/usbdrv.c ****  */
+ 318:usbdrv/usbdrv.c ****     DBG2(0x10 + ((usbRxToken >> 1) & 3), data, len);    /* SETUP0=12; OUT0=10; OUT1=13 */
+ 319:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_FN_WRITEOUT
+ 320:usbdrv/usbdrv.c ****     if(usbRxToken == 0xff){
+ 321:usbdrv/usbdrv.c ****         usbFunctionWriteOut(data, len);
+ 322:usbdrv/usbdrv.c ****         return; /* no reply expected, hence no usbMsgPtr, usbMsgFlags, usbMsgLen set */
+ 323:usbdrv/usbdrv.c ****     }
+ 324:usbdrv/usbdrv.c **** #endif
+ 325:usbdrv/usbdrv.c ****     if(usbRxToken == (uchar)USBPID_SETUP){
+ 326:usbdrv/usbdrv.c ****         usbTxLen = USBPID_NAK;  /* abort pending transmit */
+ 327:usbdrv/usbdrv.c ****         if(len == 8){   /* Setup size must be always 8 bytes. Ignore otherwise. */
+ 328:usbdrv/usbdrv.c ****             uchar type = rq->bmRequestType & USBRQ_TYPE_MASK;
+ 329:usbdrv/usbdrv.c ****             if(type == USBRQ_TYPE_STANDARD){
+ 330:usbdrv/usbdrv.c ****                 #define SET_REPLY_LEN(len)  replyLen = (len); usbMsgPtr = replyData
+ 331:usbdrv/usbdrv.c ****                 /* This macro ensures that replyLen and usbMsgPtr are always set in the same way.
+ 332:usbdrv/usbdrv.c ****                  * That allows optimization of common code in if() branches */
+ 333:usbdrv/usbdrv.c ****                 uchar *replyData = usbTxBuf + 9; /* there is 3 bytes free space at the end of the b
+ 334:usbdrv/usbdrv.c ****                 replyData[0] = 0;   /* common to USBRQ_GET_STATUS and USBRQ_GET_INTERFACE */
+ 335:usbdrv/usbdrv.c ****                 if(rq->bRequest == USBRQ_GET_STATUS){           /* 0 */
+ 336:usbdrv/usbdrv.c ****                     uchar __attribute__((__unused__)) recipient = rq->bmRequestType & USBRQ_RCPT_MA
+ 337:usbdrv/usbdrv.c **** #if USB_CFG_IS_SELF_POWERED
+ 338:usbdrv/usbdrv.c ****                     if(recipient == USBRQ_RCPT_DEVICE)
+ 339:usbdrv/usbdrv.c ****                         replyData[0] =  USB_CFG_IS_SELF_POWERED;
+ 340:usbdrv/usbdrv.c **** #endif
+ 341:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT && USB_CFG_IMPLEMENT_HALT
+ 342:usbdrv/usbdrv.c ****                     if(recipient == USBRQ_RCPT_ENDPOINT && rq->wIndex.bytes[0] == 0x81)   /* reques
+ 343:usbdrv/usbdrv.c ****                         replyData[0] = usbTxLen1 == USBPID_STALL;
+ 344:usbdrv/usbdrv.c **** #endif
+ 345:usbdrv/usbdrv.c ****                     replyData[1] = 0;
+ 346:usbdrv/usbdrv.c ****                     SET_REPLY_LEN(2);
+ 347:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_SET_ADDRESS){    /* 5 */
+ 348:usbdrv/usbdrv.c ****                     usbNewDeviceAddr = rq->wValue.bytes[0];
+ 349:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_GET_DESCRIPTOR){ /* 6 */
+ 350:usbdrv/usbdrv.c ****                     flags = USB_FLG_MSGPTR_IS_ROM | USB_FLG_USE_DEFAULT_RW;
+ 351:usbdrv/usbdrv.c ****                     if(rq->wValue.bytes[1] == USBDESCR_DEVICE){ /* 1 */
+ 352:usbdrv/usbdrv.c ****                         GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_DEVICE, usbDescriptorDevice)
+ 353:usbdrv/usbdrv.c ****                     }else if(rq->wValue.bytes[1] == USBDESCR_CONFIG){   /* 2 */
+ 354:usbdrv/usbdrv.c ****                         GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_CONFIGURATION, usbDescriptorConfiguratio
+ 355:usbdrv/usbdrv.c ****                     }else if(rq->wValue.bytes[1] == USBDESCR_STRING){   /* 3 */
+ 356:usbdrv/usbdrv.c **** #if USB_CFG_DESCR_PROPS_STRINGS & USB_PROP_IS_DYNAMIC
+ 357:usbdrv/usbdrv.c ****                         if(USB_CFG_DESCR_PROPS_STRINGS & USB_PROP_IS_RAM)
+ 358:usbdrv/usbdrv.c ****                             flags &= ~USB_FLG_MSGPTR_IS_ROM;
+ 359:usbdrv/usbdrv.c ****                         replyLen = usbFunctionDescriptor(rq);
+ 360:usbdrv/usbdrv.c **** #else   /* USB_CFG_DESCR_PROPS_STRINGS & USB_PROP_IS_DYNAMIC */
+ 361:usbdrv/usbdrv.c ****                         if(rq->wValue.bytes[0] == 0){   /* descriptor index */
+ 362:usbdrv/usbdrv.c ****                             GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_STRING_0, usbDescriptorString0)
+ 363:usbdrv/usbdrv.c ****                         }else if(rq->wValue.bytes[0] == 1){
+ 364:usbdrv/usbdrv.c ****                             GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_STRING_VENDOR, usbDescriptorStringVe
+ 365:usbdrv/usbdrv.c ****                         }else if(rq->wValue.bytes[0] == 2){
+ 366:usbdrv/usbdrv.c ****                             GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_STRING_PRODUCT, usbDescriptorStringD
+ 367:usbdrv/usbdrv.c ****                         }else if(rq->wValue.bytes[0] == 3){
+ 368:usbdrv/usbdrv.c ****                             GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_STRING_SERIAL_NUMBER, usbDescriptorS
+ 369:usbdrv/usbdrv.c ****                         }else if(USB_CFG_DESCR_PROPS_UNKNOWN & USB_PROP_IS_DYNAMIC){
+ 370:usbdrv/usbdrv.c ****                             replyLen = usbFunctionDescriptor(rq);
+ 371:usbdrv/usbdrv.c ****                         }
+ 372:usbdrv/usbdrv.c **** #endif  /* USB_CFG_DESCR_PROPS_STRINGS & USB_PROP_IS_DYNAMIC */
+ 373:usbdrv/usbdrv.c ****                     }else if(rq->wValue.bytes[1] == USBDESCR_HID){          /* 0x21 */
+ 374:usbdrv/usbdrv.c ****                         GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_HID, usbDescriptorConfiguration + 18)
+ 375:usbdrv/usbdrv.c ****                     }else if(rq->wValue.bytes[1] == USBDESCR_HID_REPORT){   /* 0x22 */
+ 376:usbdrv/usbdrv.c ****                         GET_DESCRIPTOR(USB_CFG_DESCR_PROPS_HID_REPORT, usbDescriptorHidReport)
+ 377:usbdrv/usbdrv.c ****                     }else if(USB_CFG_DESCR_PROPS_UNKNOWN & USB_PROP_IS_DYNAMIC){
+ 378:usbdrv/usbdrv.c ****                         replyLen = usbFunctionDescriptor(rq);
+ 379:usbdrv/usbdrv.c ****                     }
+ 380:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_GET_CONFIGURATION){  /* 8 */
+ 381:usbdrv/usbdrv.c ****                     replyData = &usbConfiguration;  /* send current configuration value */
+ 382:usbdrv/usbdrv.c ****                     SET_REPLY_LEN(1);
+ 383:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_SET_CONFIGURATION){  /* 9 */
+ 384:usbdrv/usbdrv.c ****                     usbConfiguration = rq->wValue.bytes[0];
+ 385:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_HALT
+ 386:usbdrv/usbdrv.c ****                     usbTxLen1 = USBPID_NAK;
+ 387:usbdrv/usbdrv.c **** #endif
+ 388:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_GET_INTERFACE){      /* 10 */
+ 389:usbdrv/usbdrv.c ****                     SET_REPLY_LEN(1);
+ 390:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT
+ 391:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_SET_INTERFACE){      /* 11 */
+ 392:usbdrv/usbdrv.c ****                     USB_SET_DATATOKEN1(USBPID_DATA0);   /* reset data toggling for interrupt endpoi
+ 393:usbdrv/usbdrv.c **** #   if USB_CFG_HAVE_INTRIN_ENDPOINT3
+ 394:usbdrv/usbdrv.c ****                     USB_SET_DATATOKEN3(USBPID_DATA0);   /* reset data toggling for interrupt endpoi
+ 395:usbdrv/usbdrv.c **** #   endif
+ 396:usbdrv/usbdrv.c **** #   if USB_CFG_IMPLEMENT_HALT
+ 397:usbdrv/usbdrv.c ****                     usbTxLen1 = USBPID_NAK;
+ 398:usbdrv/usbdrv.c ****                 }else if(rq->bRequest == USBRQ_CLEAR_FEATURE || rq->bRequest == USBRQ_SET_FEATURE){
+ 399:usbdrv/usbdrv.c ****                     if(rq->wValue.bytes[0] == 0 && rq->wIndex.bytes[0] == 0x81){   /* feature 0 == 
+ 400:usbdrv/usbdrv.c ****                         usbTxLen1 = rq->bRequest == USBRQ_CLEAR_FEATURE ? USBPID_NAK : USBPID_STALL
+ 401:usbdrv/usbdrv.c ****                         USB_SET_DATATOKEN1(USBPID_DATA0);   /* reset data toggling for interrupt en
+ 402:usbdrv/usbdrv.c **** #       if USB_CFG_HAVE_INTRIN_ENDPOINT3
+ 403:usbdrv/usbdrv.c ****                         USB_SET_DATATOKEN3(USBPID_DATA0);   /* reset data toggling for interrupt en
+ 404:usbdrv/usbdrv.c **** #       endif
+ 405:usbdrv/usbdrv.c ****                     }
+ 406:usbdrv/usbdrv.c **** #   endif
+ 407:usbdrv/usbdrv.c **** #endif
+ 408:usbdrv/usbdrv.c ****                 }else{
+ 409:usbdrv/usbdrv.c ****                     /* the following requests can be ignored, send default reply */
+ 410:usbdrv/usbdrv.c ****                     /* 1: CLEAR_FEATURE, 3: SET_FEATURE, 7: SET_DESCRIPTOR */
+ 411:usbdrv/usbdrv.c ****                     /* 12: SYNCH_FRAME */
+ 412:usbdrv/usbdrv.c ****                 }
+ 413:usbdrv/usbdrv.c ****                 #undef SET_REPLY_LEN
+ 414:usbdrv/usbdrv.c ****             }else{  /* not a standard request -- must be vendor or class request */
+ 415:usbdrv/usbdrv.c ****                 replyLen = usbFunctionSetup(data);
+ 416:usbdrv/usbdrv.c ****             }
+ 417:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_FN_READ || USB_CFG_IMPLEMENT_FN_WRITE
+ 418:usbdrv/usbdrv.c ****             if(replyLen == 0xff){   /* use user-supplied read/write function */
+ 419:usbdrv/usbdrv.c ****                 if((rq->bmRequestType & USBRQ_DIR_MASK) == USBRQ_DIR_DEVICE_TO_HOST){
+ 420:usbdrv/usbdrv.c ****                     replyLen = rq->wLength.bytes[0];    /* IN transfers only */
+ 421:usbdrv/usbdrv.c ****                 }
+ 422:usbdrv/usbdrv.c ****                 flags &= ~USB_FLG_USE_DEFAULT_RW;  /* we have no valid msg, use user supplied read/
+ 423:usbdrv/usbdrv.c ****             }else   /* The 'else' prevents that we limit a replyLen of 0xff to the maximum transfer
+ 424:usbdrv/usbdrv.c **** #endif
+ 425:usbdrv/usbdrv.c ****             if(!rq->wLength.bytes[1] && replyLen > rq->wLength.bytes[0])  /* limit length to max */
+ 426:usbdrv/usbdrv.c ****                 replyLen = rq->wLength.bytes[0];
+ 427:usbdrv/usbdrv.c ****         }
+ 428:usbdrv/usbdrv.c ****         /* make sure that data packets which are sent as ACK to an OUT transfer are always zero siz
+ 429:usbdrv/usbdrv.c ****     }else{  /* DATA packet from out request */
+ 430:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_FN_WRITE
+ 431:usbdrv/usbdrv.c ****         if(!(usbMsgFlags & USB_FLG_USE_DEFAULT_RW)){
+ 432:usbdrv/usbdrv.c ****             uchar rval = usbFunctionWrite(data, len);
+ 433:usbdrv/usbdrv.c ****             replyLen = 0xff;
+ 434:usbdrv/usbdrv.c ****             if(rval == 0xff){       /* an error occurred */
+ 435:usbdrv/usbdrv.c ****                 usbMsgLen = 0xff;   /* cancel potentially pending data packet for ACK */
+ 436:usbdrv/usbdrv.c ****                 usbTxLen = USBPID_STALL;
+ 437:usbdrv/usbdrv.c ****             }else if(rval != 0){    /* This was the final package */
+ 438:usbdrv/usbdrv.c ****                 replyLen = 0;       /* answer with a zero-sized data packet */
+ 439:usbdrv/usbdrv.c ****             }
+ 440:usbdrv/usbdrv.c ****             flags = 0;    /* start with a DATA1 package, stay with user supplied write() function *
+ 441:usbdrv/usbdrv.c ****         }
+ 442:usbdrv/usbdrv.c **** #endif
+ 443:usbdrv/usbdrv.c ****     }
+ 444:usbdrv/usbdrv.c ****     usbMsgFlags = flags;
+ 445:usbdrv/usbdrv.c ****     usbMsgLen = replyLen;
+ 446:usbdrv/usbdrv.c **** }
+ 447:usbdrv/usbdrv.c **** 
+ 448:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+ 449:usbdrv/usbdrv.c **** 
+ 450:usbdrv/usbdrv.c **** static void usbBuildTxBlock(void)
+ 451:usbdrv/usbdrv.c **** {
+ 452:usbdrv/usbdrv.c **** uchar   wantLen, len, txLen, token;
+ 453:usbdrv/usbdrv.c **** 
+ 454:usbdrv/usbdrv.c ****     wantLen = usbMsgLen;
+ 455:usbdrv/usbdrv.c ****     if(wantLen > 8)
+ 456:usbdrv/usbdrv.c ****         wantLen = 8;
+ 457:usbdrv/usbdrv.c ****     usbMsgLen -= wantLen;
+ 458:usbdrv/usbdrv.c ****     token = USBPID_DATA1;
+ 459:usbdrv/usbdrv.c ****     if(usbMsgFlags & USB_FLG_TX_PACKET)
+ 460:usbdrv/usbdrv.c ****         token = USBPID_DATA0;
+ 461:usbdrv/usbdrv.c ****     usbMsgFlags++;
+ 462:usbdrv/usbdrv.c ****     len = usbRead(usbTxBuf + 1, wantLen);
+ 463:usbdrv/usbdrv.c ****     if(len <= 8){           /* valid data packet */
+ 464:usbdrv/usbdrv.c ****         usbCrc16Append(&usbTxBuf[1], len);
+ 465:usbdrv/usbdrv.c ****         txLen = len + 4;    /* length including sync byte */
+ 466:usbdrv/usbdrv.c ****         if(len < 8)         /* a partial package identifies end of message */
+ 467:usbdrv/usbdrv.c ****             usbMsgLen = 0xff;
+ 468:usbdrv/usbdrv.c ****     }else{
+ 469:usbdrv/usbdrv.c ****         txLen = USBPID_STALL;   /* stall the endpoint */
+ 470:usbdrv/usbdrv.c ****         usbMsgLen = 0xff;
+ 471:usbdrv/usbdrv.c ****     }
+ 472:usbdrv/usbdrv.c ****     usbTxBuf[0] = token;
+ 473:usbdrv/usbdrv.c ****     usbTxLen = txLen;
+ 474:usbdrv/usbdrv.c ****     DBG2(0x20, usbTxBuf, txLen-1);
+ 475:usbdrv/usbdrv.c **** }
+ 476:usbdrv/usbdrv.c **** 
+ 477:usbdrv/usbdrv.c **** static inline uchar isNotSE0(void)
+ 478:usbdrv/usbdrv.c **** {
+ 479:usbdrv/usbdrv.c **** uchar   rval;
+ 480:usbdrv/usbdrv.c **** /* We want to do
+ 481:usbdrv/usbdrv.c ****  *     return (USBIN & USBMASK);
+ 482:usbdrv/usbdrv.c ****  * here, but the compiler does int-expansion acrobatics.
+ 483:usbdrv/usbdrv.c ****  * We can avoid this by assigning to a char-sized variable.
+ 484:usbdrv/usbdrv.c ****  */
+ 485:usbdrv/usbdrv.c ****     rval = USBIN & USBMASK;
+ 486:usbdrv/usbdrv.c ****     return rval;
+ 487:usbdrv/usbdrv.c **** }
+ 488:usbdrv/usbdrv.c **** 
+ 489:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+ 490:usbdrv/usbdrv.c **** 
+ 491:usbdrv/usbdrv.c **** USB_PUBLIC void usbPoll(void)
+ 492:usbdrv/usbdrv.c **** {
+ 493:usbdrv/usbdrv.c **** schar   len;
+ 494:usbdrv/usbdrv.c **** uchar   i;
+ 495:usbdrv/usbdrv.c **** 
+ 496:usbdrv/usbdrv.c ****     if((len = usbRxLen) > 0){
+ 497:usbdrv/usbdrv.c **** /* We could check CRC16 here -- but ACK has already been sent anyway. If you
+ 498:usbdrv/usbdrv.c ****  * need data integrity checks with this driver, check the CRC in your app
+ 499:usbdrv/usbdrv.c ****  * code and report errors back to the host. Since the ACK was already sent,
+ 500:usbdrv/usbdrv.c ****  * retries must be handled on application level.
+ 501:usbdrv/usbdrv.c ****  * unsigned crc = usbCrc16(buffer + 1, usbRxLen - 3);
+ 502:usbdrv/usbdrv.c ****  */
+ 503:usbdrv/usbdrv.c ****         usbProcessRx(usbRxBuf + USB_BUFSIZE + 1 - usbInputBufOffset, len - 3);
+ 504:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_FLOWCONTROL
+ 505:usbdrv/usbdrv.c ****         if(usbRxLen > 0)    /* only mark as available if not inactivated */
+ 506:usbdrv/usbdrv.c ****             usbRxLen = 0;
+ 507:usbdrv/usbdrv.c **** #else
+ 508:usbdrv/usbdrv.c ****         usbRxLen = 0;       /* mark rx buffer as available */
+ 509:usbdrv/usbdrv.c **** #endif
+ 510:usbdrv/usbdrv.c ****     }
+ 511:usbdrv/usbdrv.c ****     if(usbTxLen & 0x10){ /* transmit system idle */
+ 512:usbdrv/usbdrv.c ****         if(usbMsgLen != 0xff){  /* transmit data pending? */
+ 513:usbdrv/usbdrv.c ****             usbBuildTxBlock();
+ 514:usbdrv/usbdrv.c ****         }
+ 515:usbdrv/usbdrv.c ****     }
+ 516:usbdrv/usbdrv.c ****     for(i = 10; i > 0; i--){
+ 517:usbdrv/usbdrv.c ****         if(isNotSE0())
+ 518:usbdrv/usbdrv.c ****             break;
+ 519:usbdrv/usbdrv.c ****     }
+ 520:usbdrv/usbdrv.c ****     if(i == 0){ /* RESET condition, called multiple times during reset */
+ 521:usbdrv/usbdrv.c ****         usbNewDeviceAddr = 0;
+ 522:usbdrv/usbdrv.c ****         usbDeviceAddr = 0;
+ 523:usbdrv/usbdrv.c **** #if USB_CFG_IMPLEMENT_HALT
+ 524:usbdrv/usbdrv.c ****         usbTxLen1 = USBPID_NAK;
+ 525:usbdrv/usbdrv.c **** #if USB_CFG_HAVE_INTRIN_ENDPOINT3
+ 526:usbdrv/usbdrv.c ****         usbTxLen3 = USBPID_NAK;
+ 527:usbdrv/usbdrv.c **** #endif
+ 528:usbdrv/usbdrv.c **** #endif
+ 529:usbdrv/usbdrv.c ****         DBG1(0xff, 0, 0);
+ 530:usbdrv/usbdrv.c ****     }
+ 531:usbdrv/usbdrv.c **** }
+ 532:usbdrv/usbdrv.c **** 
+ 533:usbdrv/usbdrv.c **** /* ------------------------------------------------------------------------- */
+ 534:usbdrv/usbdrv.c **** 
+ 535:usbdrv/usbdrv.c **** USB_PUBLIC void usbInit(void)
+ 536:usbdrv/usbdrv.c **** {
+  95               	.LM0:
+  96               	/* prologue: frame size=0 */
+  97               	/* prologue end (size=0) */
+ 537:usbdrv/usbdrv.c **** #if USB_INTR_CFG_SET != 0
+ 538:usbdrv/usbdrv.c ****     USB_INTR_CFG |= USB_INTR_CFG_SET;
+  99               	.LM1:
+ 100 0000 85B7      		in r24,85-0x20
+ 101 0002 8360      		ori r24,lo8(3)
+ 102 0004 85BF      		out 85-0x20,r24
+ 539:usbdrv/usbdrv.c **** #endif
+ 540:usbdrv/usbdrv.c **** #if USB_INTR_CFG_CLR != 0
+ 541:usbdrv/usbdrv.c ****     USB_INTR_CFG &= ~(USB_INTR_CFG_CLR);
+ 542:usbdrv/usbdrv.c **** #endif
+ 543:usbdrv/usbdrv.c ****     USB_INTR_ENABLE |= (1 << USB_INTR_ENABLE_BIT);
+ 104               	.LM2:
+ 105 0006 8BB7      		in r24,91-0x20
+ 106 0008 8064      		ori r24,lo8(64)
+ 107 000a 8BBF      		out 91-0x20,r24
+ 108               	/* epilogue: frame size=0 */
+ 109 000c 0895      		ret
+ 110               	/* epilogue end (size=1) */
+ 111               	/* function usbInit size 7 (6) */
+ 113               	.Lscope0:
+ 115               	.global	usbPoll
+ 117               	usbPoll:
+ 119               	.LM3:
+ 120               	/* prologue: frame size=0 */
+ 121 000e 0F93      		push r16
+ 122 0010 1F93      		push r17
+ 123 0012 CF93      		push r28
+ 124 0014 DF93      		push r29
+ 125               	/* prologue end (size=4) */
+ 127               	.LM4:
+ 128 0016 6091 0000 		lds r22,usbRxLen
+ 129 001a 1616      		cp __zero_reg__,r22
+ 130 001c 04F0      		brlt .+2
+ 131 001e 00C0      		rjmp .L4
+ 133               	.LM5:
+ 134 0020 6350      		subi r22,lo8(-(-3))
+ 135 0022 8091 0000 		lds r24,usbInputBufOffset
+ 136 0026 C0E0      		ldi r28,lo8(usbRxBuf+12)
+ 137 0028 D0E0      		ldi r29,hi8(usbRxBuf+12)
+ 138 002a C81B      		sub r28,r24
+ 139 002c D109      		sbc r29,__zero_reg__
+ 140               	.LBB16:
+ 141               	.LBB17:
+ 143               	.LM6:
+ 144 002e 8091 0000 		lds r24,usbRxToken
+ 145 0032 8D32      		cpi r24,lo8(45)
+ 146 0034 01F0      		breq .+2
+ 147 0036 00C0      		rjmp .L6
+ 149               	.LM7:
+ 150 0038 8AE5      		ldi r24,lo8(90)
+ 151 003a 8093 0000 		sts usbTxLen,r24
+ 153               	.LM8:
+ 154 003e 6830      		cpi r22,lo8(8)
+ 155 0040 01F0      		breq .+2
+ 156 0042 00C0      		rjmp .L8
+ 157               	.LBB18:
+ 159               	.LM9:
+ 160 0044 8881      		ld r24,Y
+ 161 0046 8076      		andi r24,lo8(96)
+ 162 0048 01F0      		breq .+2
+ 163 004a 00C0      		rjmp .L10
+ 164               	.LBB19:
+ 166               	.LM10:
+ 167 004c 20E0      		ldi r18,lo8(usbTxBuf+9)
+ 168 004e 30E0      		ldi r19,hi8(usbTxBuf+9)
+ 169 0050 1092 0000 		sts usbTxBuf+9,__zero_reg__
+ 171               	.LM11:
+ 172 0054 8981      		ldd r24,Y+1
+ 173 0056 8823      		tst r24
+ 174 0058 01F4      		brne .L12
+ 175               	.LBB20:
+ 177               	.LM12:
+ 178 005a 1092 0000 		sts usbTxBuf+10,__zero_reg__
+ 180               	.LM13:
+ 181 005e 3093 0000 		sts (usbMsgPtr)+1,r19
+ 182 0062 2093 0000 		sts usbMsgPtr,r18
+ 183 0066 92E0      		ldi r25,lo8(2)
+ 184 0068 00C0      		rjmp .L38
+ 185               	.L12:
+ 186               	.LBE20:
+ 188               	.LM14:
+ 189 006a 8530      		cpi r24,lo8(5)
+ 190 006c 01F4      		brne .L15
+ 192               	.LM15:
+ 193 006e 8A81      		ldd r24,Y+2
+ 194 0070 8093 0000 		sts usbNewDeviceAddr,r24
+ 195 0074 00C0      		rjmp .L36
+ 196               	.L15:
+ 198               	.LM16:
+ 199 0076 8630      		cpi r24,lo8(6)
+ 200 0078 01F4      		brne .L17
+ 202               	.LM17:
+ 203 007a 8B81      		ldd r24,Y+3
+ 204 007c 8130      		cpi r24,lo8(1)
+ 205 007e 01F4      		brne .L19
+ 207               	.LM18:
+ 208 0080 80E0      		ldi r24,lo8(usbDescriptorDevice)
+ 209 0082 90E0      		ldi r25,hi8(usbDescriptorDevice)
+ 210 0084 00C0      		rjmp .L75
+ 211               	.L19:
+ 213               	.LM19:
+ 214 0086 8230      		cpi r24,lo8(2)
+ 215 0088 01F4      		brne .L21
+ 217               	.LM20:
+ 218 008a 80E0      		ldi r24,lo8(usbDescriptorConfiguration)
+ 219 008c 90E0      		ldi r25,hi8(usbDescriptorConfiguration)
+ 220               	.L75:
+ 221 008e 9093 0000 		sts (usbMsgPtr)+1,r25
+ 222 0092 8093 0000 		sts usbMsgPtr,r24
+ 223 0096 92E1      		ldi r25,lo8(18)
+ 224 0098 00C0      		rjmp .L73
+ 225               	.L21:
+ 227               	.LM21:
+ 228 009a 8330      		cpi r24,lo8(3)
+ 229 009c 01F0      		breq .+2
+ 230 009e 00C0      		rjmp .L23
+ 232               	.LM22:
+ 233 00a0 8A81      		ldd r24,Y+2
+ 234 00a2 8823      		tst r24
+ 235 00a4 01F4      		brne .L25
+ 237               	.LM23:
+ 238 00a6 80E0      		ldi r24,lo8(usbDescriptorString0)
+ 239 00a8 90E0      		ldi r25,hi8(usbDescriptorString0)
+ 240 00aa 9093 0000 		sts (usbMsgPtr)+1,r25
+ 241 00ae 8093 0000 		sts usbMsgPtr,r24
+ 242 00b2 94E0      		ldi r25,lo8(4)
+ 243 00b4 00C0      		rjmp .L73
+ 244               	.L25:
+ 246               	.LM24:
+ 247 00b6 8130      		cpi r24,lo8(1)
+ 248 00b8 01F4      		brne .L27
+ 250               	.LM25:
+ 251 00ba 80E0      		ldi r24,lo8(usbDescriptorStringVendor)
+ 252 00bc 90E0      		ldi r25,hi8(usbDescriptorStringVendor)
+ 253 00be 9093 0000 		sts (usbMsgPtr)+1,r25
+ 254 00c2 8093 0000 		sts usbMsgPtr,r24
+ 255 00c6 98E0      		ldi r25,lo8(8)
+ 256 00c8 00C0      		rjmp .L73
+ 257               	.L27:
+ 259               	.LM26:
+ 260 00ca 8230      		cpi r24,lo8(2)
+ 261 00cc 01F4      		brne .L29
+ 263               	.LM27:
+ 264 00ce 80E0      		ldi r24,lo8(usbDescriptorStringDevice)
+ 265 00d0 90E0      		ldi r25,hi8(usbDescriptorStringDevice)
+ 266 00d2 9093 0000 		sts (usbMsgPtr)+1,r25
+ 267 00d6 8093 0000 		sts usbMsgPtr,r24
+ 268 00da 96E1      		ldi r25,lo8(22)
+ 269 00dc 00C0      		rjmp .L73
+ 270               	.L29:
+ 272               	.LM28:
+ 273 00de 8330      		cpi r24,lo8(3)
+ 274 00e0 01F0      		breq .+2
+ 275 00e2 00C0      		rjmp .L23
+ 277               	.LM29:
+ 278 00e4 80E0      		ldi r24,lo8(usbDescriptorStringSerialNumber)
+ 279 00e6 90E0      		ldi r25,hi8(usbDescriptorStringSerialNumber)
+ 280 00e8 9093 0000 		sts (usbMsgPtr)+1,r25
+ 281 00ec 8093 0000 		sts usbMsgPtr,r24
+ 282 00f0 9AE0      		ldi r25,lo8(10)
+ 283 00f2 00C0      		rjmp .L73
+ 284               	.L17:
+ 286               	.LM30:
+ 287 00f4 8830      		cpi r24,lo8(8)
+ 288 00f6 01F4      		brne .L32
+ 290               	.LM31:
+ 291 00f8 80E0      		ldi r24,lo8(usbConfiguration)
+ 292 00fa 90E0      		ldi r25,hi8(usbConfiguration)
+ 293 00fc 9093 0000 		sts (usbMsgPtr)+1,r25
+ 294 0100 8093 0000 		sts usbMsgPtr,r24
+ 295 0104 00C0      		rjmp .L76
+ 296               	.L32:
+ 298               	.LM32:
+ 299 0106 8930      		cpi r24,lo8(9)
+ 300 0108 01F4      		brne .L34
+ 302               	.LM33:
+ 303 010a 8A81      		ldd r24,Y+2
+ 304 010c 8093 0000 		sts usbConfiguration,r24
+ 305 0110 00C0      		rjmp .L36
+ 306               	.L34:
+ 308               	.LM34:
+ 309 0112 8A30      		cpi r24,lo8(10)
+ 310 0114 01F0      		breq .+2
+ 311 0116 00C0      		rjmp .L36
+ 313               	.LM35:
+ 314 0118 3093 0000 		sts (usbMsgPtr)+1,r19
+ 315 011c 2093 0000 		sts usbMsgPtr,r18
+ 316               	.L76:
+ 317 0120 91E0      		ldi r25,lo8(1)
+ 318 0122 00C0      		rjmp .L38
+ 319               	.L10:
+ 320               	.LBE19:
+ 321               	.LBE18:
+ 322               	.LBE17:
+ 324               	.LM36:
+ 325 0124 CE01      		movw r24,r28
+ 326 0126 00D0      		rcall usbFunctionSetup
+ 327 0128 982F      		mov r25,r24
+ 328               	.LBB21:
+ 329               	.LBB22:
+ 331               	.LM37:
+ 332 012a 8F3F      		cpi r24,lo8(-1)
+ 333 012c 01F4      		brne .L38
+ 335               	.LM38:
+ 336 012e 8881      		ld r24,Y
+ 337 0130 87FF      		sbrs r24,7
+ 338 0132 00C0      		rjmp .L74
+ 340               	.LM39:
+ 341 0134 9E81      		ldd r25,Y+6
+ 342 0136 00C0      		rjmp .L74
+ 343               	.L38:
+ 344 0138 20E8      		ldi r18,lo8(-128)
+ 345               	.L14:
+ 347               	.LM40:
+ 348 013a 8F81      		ldd r24,Y+7
+ 349 013c 8823      		tst r24
+ 350 013e 01F4      		brne .L42
+ 351 0140 8E81      		ldd r24,Y+6
+ 352 0142 8917      		cp r24,r25
+ 353 0144 00F4      		brsh .L42
+ 354 0146 982F      		mov r25,r24
+ 355 0148 00C0      		rjmp .L42
+ 356               	.L6:
+ 357               	.LBE22:
+ 359               	.LM41:
+ 360 014a 8091 0000 		lds r24,usbMsgFlags
+ 361 014e 87FD      		sbrc r24,7
+ 362 0150 00C0      		rjmp .L8
+ 363               	.LBE21:
+ 365               	.LM42:
+ 366 0152 CE01      		movw r24,r28
+ 367 0154 00D0      		rcall usbFunctionWrite
+ 368               	.LBB23:
+ 369               	.LBB24:
+ 371               	.LM43:
+ 372 0156 8F3F      		cpi r24,lo8(-1)
+ 373 0158 01F4      		brne .L46
+ 375               	.LM44:
+ 376 015a 8093 0000 		sts usbMsgLen,r24
+ 378               	.LM45:
+ 379 015e 8EE1      		ldi r24,lo8(30)
+ 380 0160 8093 0000 		sts usbTxLen,r24
+ 381               	.L77:
+ 382 0164 9FEF      		ldi r25,lo8(-1)
+ 383               	.L74:
+ 384 0166 20E0      		ldi r18,lo8(0)
+ 385 0168 00C0      		rjmp .L42
+ 386               	.L46:
+ 388               	.LM46:
+ 389 016a 8823      		tst r24
+ 390 016c 01F0      		breq .L77
+ 391 016e 90E0      		ldi r25,lo8(0)
+ 392 0170 00C0      		rjmp .L74
+ 393               	.L8:
+ 394 0172 90E0      		ldi r25,lo8(0)
+ 395 0174 20E8      		ldi r18,lo8(-128)
+ 396               	.L42:
+ 397               	.LBE24:
+ 399               	.LM47:
+ 400 0176 2093 0000 		sts usbMsgFlags,r18
+ 402               	.LM48:
+ 403 017a 9093 0000 		sts usbMsgLen,r25
+ 404               	.LBE23:
+ 405               	.LBE16:
+ 407               	.LM49:
+ 408 017e 1092 0000 		sts usbRxLen,__zero_reg__
+ 409               	.L4:
+ 411               	.LM50:
+ 412 0182 8091 0000 		lds r24,usbTxLen
+ 413 0186 84FF      		sbrs r24,4
+ 414 0188 00C0      		rjmp .L50
+ 416               	.LM51:
+ 417 018a 8091 0000 		lds r24,usbMsgLen
+ 418 018e 8F3F      		cpi r24,lo8(-1)
+ 419 0190 01F4      		brne .+2
+ 420 0192 00C0      		rjmp .L50
+ 421 0194 682F      		mov r22,r24
+ 422 0196 8930      		cpi r24,lo8(9)
+ 423 0198 00F0      		brlo .L53
+ 424 019a 68E0      		ldi r22,lo8(8)
+ 425               	.L53:
+ 426               	.LBB25:
+ 427               	.LBB26:
+ 429               	.LM52:
+ 430 019c 861B      		sub r24,r22
+ 431 019e 8093 0000 		sts usbMsgLen,r24
+ 433               	.LM53:
+ 434 01a2 8091 0000 		lds r24,usbMsgFlags
+ 435               	.LBE26:
+ 436 01a6 80FF      		sbrs r24,0
+ 437 01a8 00C0      		rjmp .L54
+ 438 01aa 03EC      		ldi r16,lo8(-61)
+ 439 01ac 00C0      		rjmp .L56
+ 440               	.L54:
+ 441 01ae 0BE4      		ldi r16,lo8(75)
+ 442               	.L56:
+ 443               	.LBB27:
+ 445               	.LM54:
+ 446 01b0 8F5F      		subi r24,lo8(-(1))
+ 447 01b2 8093 0000 		sts usbMsgFlags,r24
+ 448               	.LBB28:
+ 449               	.LBB29:
+ 451               	.LM55:
+ 452 01b6 E091 0000 		lds r30,usbMsgPtr
+ 453 01ba F091 0000 		lds r31,(usbMsgPtr)+1
+ 455               	.LM56:
+ 456 01be 86FD      		sbrc r24,6
+ 457 01c0 00C0      		rjmp .L57
+ 458 01c2 962F      		mov r25,r22
+ 459 01c4 A0E0      		ldi r26,lo8(usbTxBuf+1)
+ 460 01c6 B0E0      		ldi r27,hi8(usbTxBuf+1)
+ 461 01c8 00C0      		rjmp .L59
+ 462               	.L57:
+ 463 01ca 962F      		mov r25,r22
+ 464 01cc A0E0      		ldi r26,lo8(usbTxBuf+1)
+ 465 01ce B0E0      		ldi r27,hi8(usbTxBuf+1)
+ 466 01d0 00C0      		rjmp .L60
+ 467               	.L61:
+ 468               	.LBB30:
+ 469               	.LBB31:
+ 471               	.LM57:
+ 472               	/* #APP */
+ 473 01d2 C895      		lpm
+ 474 01d4 802D      		mov r24, r0
+ 475               		
+ 476               	/* #NOAPP */
+ 477               	.LBE31:
+ 479               	.LM58:
+ 480 01d6 8D93      		st X+,r24
+ 482               	.LM59:
+ 483 01d8 3196      		adiw r30,1
+ 484               	.L60:
+ 485               	.LBE30:
+ 487               	.LM60:
+ 488 01da 9150      		subi r25,1
+ 489 01dc 00F4      		brcc .L61
+ 490 01de 00C0      		rjmp .L62
+ 491               	.L63:
+ 493               	.LM61:
+ 494 01e0 8191      		ld r24,Z+
+ 495 01e2 8D93      		st X+,r24
+ 496               	.L59:
+ 498               	.LM62:
+ 499 01e4 9150      		subi r25,1
+ 500 01e6 00F4      		brcc .L63
+ 501               	.L62:
+ 503               	.LM63:
+ 504 01e8 F093 0000 		sts (usbMsgPtr)+1,r31
+ 505 01ec E093 0000 		sts usbMsgPtr,r30
+ 506               	.LBE29:
+ 507               	.LBE28:
+ 509               	.LM64:
+ 510 01f0 7727      		clr r23
+ 511 01f2 162F      		mov r17,r22
+ 513               	.LM65:
+ 514 01f4 80E0      		ldi r24,lo8(usbTxBuf+1)
+ 515 01f6 90E0      		ldi r25,hi8(usbTxBuf+1)
+ 516 01f8 00D0      		rcall usbCrc16Append
+ 518               	.LM66:
+ 519 01fa 1830      		cpi r17,lo8(8)
+ 520 01fc 00F4      		brsh .L64
+ 522               	.LM67:
+ 523 01fe 8FEF      		ldi r24,lo8(-1)
+ 524 0200 8093 0000 		sts usbMsgLen,r24
+ 525               	.L64:
+ 527               	.LM68:
+ 528 0204 0093 0000 		sts usbTxBuf,r16
+ 530               	.LM69:
+ 531 0208 1C5F      		subi r17,lo8(-(4))
+ 533               	.LM70:
+ 534 020a 1093 0000 		sts usbTxLen,r17
+ 535               	.L50:
+ 536 020e 9AE0      		ldi r25,lo8(10)
+ 537               	.L66:
+ 538               	.LBE27:
+ 539               	.LBE25:
+ 540               	.LBB32:
+ 541               	.LBB33:
+ 543               	.LM71:
+ 544 0210 86B3      		in r24,54-0x20
+ 545               	.LBE33:
+ 546               	.LBE32:
+ 548               	.LM72:
+ 549 0212 8370      		andi r24,lo8(3)
+ 550 0214 01F4      		brne .L70
+ 552               	.LM73:
+ 553 0216 9150      		subi r25,lo8(-(-1))
+ 554 0218 01F4      		brne .L66
+ 556               	.LM74:
+ 557 021a 1092 0000 		sts usbNewDeviceAddr,__zero_reg__
+ 559               	.LM75:
+ 560 021e 1092 0000 		sts usbDeviceAddr,__zero_reg__
+ 561 0222 00C0      		rjmp .L70
+ 562               	.L36:
+ 564               	.LM76:
+ 565 0224 90E0      		ldi r25,lo8(0)
+ 566 0226 00C0      		rjmp .L38
+ 567               	.L23:
+ 568 0228 90E0      		ldi r25,lo8(0)
+ 569               	.L73:
+ 570 022a 20EC      		ldi r18,lo8(-64)
+ 571 022c 00C0      		rjmp .L14
+ 572               	.L70:
+ 573               	/* epilogue: frame size=0 */
+ 574 022e DF91      		pop r29
+ 575 0230 CF91      		pop r28
+ 576 0232 1F91      		pop r17
+ 577 0234 0F91      		pop r16
+ 578 0236 0895      		ret
+ 579               	/* epilogue end (size=5) */
+ 580               	/* function usbPoll size 286 (277) */
+ 608               	.Lscope1:
+ 609               	.global	usbMsgLen
+ 610               		.data
+ 613               	usbMsgLen:
+ 614 0000 FF        		.byte	-1
+ 615               	.global	usbTxLen
+ 618               	usbTxLen:
+ 619 0001 5A        		.byte	90
+ 620               	.global	usbDescriptorString0
+ 621               		.section	.progmem.data,"a",@progbits
+ 624               	usbDescriptorString0:
+ 625 0000 04        		.byte	4
+ 626 0001 03        		.byte	3
+ 627 0002 09        		.byte	9
+ 628 0003 04        		.byte	4
+ 629               	.global	usbDescriptorStringVendor
+ 632               	usbDescriptorStringVendor:
+ 633 0004 0803      		.word	776
+ 634 0006 6D00      		.word	109
+ 635 0008 7200      		.word	114
+ 636 000a 7500      		.word	117
+ 637               	.global	usbDescriptorStringDevice
+ 640               	usbDescriptorStringDevice:
+ 641 000c 1603      		.word	790
+ 642 000e 4D00      		.word	77
+ 643 0010 6900      		.word	105
+ 644 0012 6400      		.word	100
+ 645 0014 6900      		.word	105
+ 646 0016 7300      		.word	115
+ 647 0018 6500      		.word	101
+ 648 001a 6E00      		.word	110
+ 649 001c 6400      		.word	100
+ 650 001e 6500      		.word	101
+ 651 0020 7200      		.word	114
+ 652               	.global	usbDescriptorStringSerialNumber
+ 655               	usbDescriptorStringSerialNumber:
+ 656 0022 0A03      		.word	778
+ 657 0024 4E00      		.word	78
+ 658 0026 6F00      		.word	111
+ 659 0028 6E00      		.word	110
+ 660 002a 6500      		.word	101
+ 661               	.global	usbDescriptorDevice
+ 664               	usbDescriptorDevice:
+ 665 002c 12        		.byte	18
+ 666 002d 01        		.byte	1
+ 667 002e 10        		.byte	16
+ 668 002f 01        		.byte	1
+ 669 0030 FF        		.byte	-1
+ 670 0031 00        		.byte	0
+ 671 0032 00        		.byte	0
+ 672 0033 08        		.byte	8
+ 673 0034 C0        		.byte	-64
+ 674 0035 16        		.byte	22
+ 675 0036 DC        		.byte	-36
+ 676 0037 05        		.byte	5
+ 677 0038 02        		.byte	2
+ 678 0039 01        		.byte	1
+ 679 003a 01        		.byte	1
+ 680 003b 02        		.byte	2
+ 681 003c 03        		.byte	3
+ 682 003d 01        		.byte	1
+ 683               	.global	usbDescriptorConfiguration
+ 686               	usbDescriptorConfiguration:
+ 687 003e 09        		.byte	9
+ 688 003f 02        		.byte	2
+ 689 0040 12        		.byte	18
+ 690 0041 00        		.byte	0
+ 691 0042 01        		.byte	1
+ 692 0043 01        		.byte	1
+ 693 0044 00        		.byte	0
+ 694 0045 80        		.byte	-128
+ 695 0046 19        		.byte	25
+ 696 0047 09        		.byte	9
+ 697 0048 04        		.byte	4
+ 698 0049 00        		.byte	0
+ 699 004a 00        		.byte	0
+ 700 004b 00        		.byte	0
+ 701 004c 00        		.byte	0
+ 702 004d 00        		.byte	0
+ 703 004e 00        		.byte	0
+ 704 004f 00        		.byte	0
+ 705               		.lcomm usbMsgFlags,1
+ 706               		.comm usbMsgPtr,2,1
+ 707               		.comm usbConfiguration,1,1
+ 708               		.comm usbRxBuf,22,1
+ 709               		.comm usbInputBufOffset,1,1
+ 710               		.comm usbDeviceAddr,1,1
+ 711               		.comm usbNewDeviceAddr,1,1
+ 712               		.comm usbRxLen,1,1
+ 713               		.comm usbCurrentTok,1,1
+ 714               		.comm usbRxToken,1,1
+ 715               		.comm usbTxBuf,11,1
+ 735               		.text
+ 737               	.Letext0:
+ 738               	/* File "usbdrv/usbdrv.c": code  293 = 0x0125 ( 283), prologues   4, epilogues   6 */
+DEFINED SYMBOLS
+                            *ABS*:00000000 usbdrv.c
+     /tmp/ccuhcsge.s:3      *ABS*:0000003f __SREG__
+     /tmp/ccuhcsge.s:4      *ABS*:0000003e __SP_H__
+     /tmp/ccuhcsge.s:5      *ABS*:0000003d __SP_L__
+     /tmp/ccuhcsge.s:6      *ABS*:00000000 __tmp_reg__
+     /tmp/ccuhcsge.s:7      *ABS*:00000001 __zero_reg__
+     /tmp/ccuhcsge.s:93     .text:00000000 usbInit
+     /tmp/ccuhcsge.s:117    .text:0000000e usbPoll
+                            *COM*:00000001 usbRxLen
+                            *COM*:00000001 usbInputBufOffset
+                            *COM*:00000016 usbRxBuf
+                            *COM*:00000001 usbRxToken
+     /tmp/ccuhcsge.s:618    .data:00000001 usbTxLen
+                            *COM*:0000000b usbTxBuf
+                            *COM*:00000002 usbMsgPtr
+                            *COM*:00000001 usbNewDeviceAddr
+     /tmp/ccuhcsge.s:664    .progmem.data:0000002c usbDescriptorDevice
+     /tmp/ccuhcsge.s:686    .progmem.data:0000003e usbDescriptorConfiguration
+     /tmp/ccuhcsge.s:624    .progmem.data:00000000 usbDescriptorString0
+     /tmp/ccuhcsge.s:632    .progmem.data:00000004 usbDescriptorStringVendor
+     /tmp/ccuhcsge.s:640    .progmem.data:0000000c usbDescriptorStringDevice
+     /tmp/ccuhcsge.s:655    .progmem.data:00000022 usbDescriptorStringSerialNumber
+                            *COM*:00000001 usbConfiguration
+                             .bss:00000000 usbMsgFlags
+     /tmp/ccuhcsge.s:613    .data:00000000 usbMsgLen
+                            *COM*:00000001 usbDeviceAddr
+                            *COM*:00000001 usbCurrentTok
+
+UNDEFINED SYMBOLS
+__do_copy_data
+__do_clear_bss
+usbFunctionSetup
+usbFunctionWrite
+usbCrc16Append
